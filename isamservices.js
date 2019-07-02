@@ -63,6 +63,7 @@ function validateUsernamePassword(req ,rsp) {
 			} else if (err == null && rsp2 != null && rsp2.statusCode == 200 && body.message != null) {
 				rsp.json(new fido2Error(body.message));
 			} else {
+				console.log("err: " + err);
 				rsp.json(new fido2Error("Error communicating with ISAM AAC server"));
 			}
 		});

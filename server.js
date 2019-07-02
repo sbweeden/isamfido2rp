@@ -7,7 +7,7 @@ const session = require('express-session');
 const request = require('request');
 const https = require('https');
 const fs = require('fs');
-const identityServices = require('./isamServices.js')
+const identityServices = require('./isamservices.js')
 const app = express();
 
 // set to ignore ssl cert errors when making requests
