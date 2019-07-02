@@ -1,0 +1,613 @@
+<html>
+<head>
+	<script src = "https://code.jquery.com/jquery-1.11.3.min.js"></script>
+	<script src = "https://kjur.github.io/jsrsasign/jsrsasign-latest-all-min.js"></script>
+	<script type="text/javascript">
+
+    	var locationHostPort = location.hostname+(location.port ? ':'+location.port: ''); 
+		var baseURL = location.protocol+'//'+locationHostPort;
+
+		var userData = {};
+
+		var attestationResponseObject = null;
+		var assertionResponseObject = null;
+
+		function htmlEncode(value){
+		    if (value) {
+		    	return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+		    } else {
+		        return '';
+		    }
+		}
+
+		function showDiv(id) {
+			document.getElementById(id).style.display = "block";
+		}
+
+		function hideDiv(id) {
+			document.getElementById(id).style.display = "none";
+		}
+
+		function showError(msg) {
+			document.getElementById("errorDiv").innerHTML = htmlEncode(msg);
+			showDiv("errorDiv");
+		}
+
+		function clearError() {
+			hideDiv("errorDiv");
+			document.getElementById("errorDiv").innerHTML = "";
+		}
+
+		function doLogin() {
+			clearError();
+			var username = document.getElementById("username").value;
+			var password = document.getElementById("password").value;
+			if (username != null && username.length > 0 && password != null && password.length > 0) {
+				$.ajax({
+					type: "POST",
+					url: baseURL + '/login',
+					data: JSON.stringify({"username": username, "password": password}),
+					beforeSend: function(request) {
+    					request.setRequestHeader("Content-type", "application/json");
+    					request.setRequestHeader("Accept", "application/json");
+  					}
+				}).done((data, textStatus, jqXHR) => {
+					var rspStatus = jqXHR.status;
+					if (rspStatus == 200) {
+						userData = data;
+						if (userData.authenticated) {
+							hideDiv("loginDiv");
+							populateFido2Div();
+							showDiv("fido2Div");
+						} else {
+							showError(data.errorMessage ? data.errorMessage : "Unable to login");
+						}
+					} else {
+						showError("Unexpected HTTP response code: " + rspStatus);
+					}
+				});
+			} else {
+				showError("Please enter a username and password");
+			}
+		}
+
+		function doLogout() {
+			clearError();
+			$.ajax({
+				type: "GET",
+				url: baseURL + '/logout',
+				beforeSend: function(request) {
+					request.setRequestHeader("Accept", "application/json");
+					}
+			}).done((data, textStatus, jqXHR) => {
+				var rspStatus = jqXHR.status;
+				if (rspStatus == 200) {
+					onLoad();
+				} else {
+					showError("Unexpected HTTP response code: " + rspStatus);
+				}
+			});
+		}
+
+		function populateFido2Div() {
+			document.getElementById("usernameDiv").innerHTML = 
+				'Hi <b>' + htmlEncode(userData.username) + '</b>.&nbsp;&nbsp;<a href="javascript:doLogout()">Logout</a>' ;
+
+			var table = document.getElementById("fido2registrationsTable");
+			// delete any existing data and table rows
+			for(var i = table.rows.length-1; i > 0; i--) {
+				table.deleteRow(i);
+			}
+			// populate retrieved credentials
+			for (var i = 0; i < userData.credentials.length; i++) {
+				var reg = userData.credentials[i];
+
+				var tr = table.insertRow(-1);
+				var friendlyNameTD = tr.insertCell(-1);
+				var brandTD = tr.insertCell(-1);
+				var rpidTD = tr.insertCell(-1);
+				var operationsTD = tr.insertCell(-1);
+
+				if (reg.nickname != null) {
+					friendlyNameTD.innerHTML = htmlEncode(reg.nickname);
+				}
+
+				if (reg.metadata != null) {
+					brandTD.innerHTML = htmlEncode(reg.metadata.description) + '<br>' 
+						+ '<img src="' + reg.metadata.icon + '" style="display:block; margin-left:auto; margin-right:auto;" />'; 
+				}
+
+				rpidTD.innerHTML = htmlEncode(reg.rpId);
+
+				operationsTD.innerHTML = "";
+				// if the rpid matches the current host, allow test
+				if (location.hostname.indexOf(reg.rpId) >= 0) {
+					operationsTD.innerHTML += '<input type="button" value="Test" onclick="testAuthentication('+i+')" />';
+					operationsTD.innerHTML += '<br />';
+				}
+				operationsTD.innerHTML += '<input type="button" value="Delete" onclick="deleteRegistration('+i+')" />';
+			}
+		}
+
+		function deleteRegistration(i) {
+			clearError();
+			$.ajax({
+				type: "POST",
+				url: baseURL + '/deleteRegistration',
+				data: JSON.stringify({"credentialId": userData.credentials[i].credentialId}),
+				beforeSend: function(request) {
+					request.setRequestHeader("Content-type", "application/json");
+					request.setRequestHeader("Accept", "application/json");
+					}
+			}).done((data, textStatus, jqXHR) => {
+				var rspStatus = jqXHR.status;
+				if (rspStatus == 200) {
+					userData = data;
+					populateFido2Div();
+				} else {
+					showError("Unexpected HTTP response code: " + rspStatus);
+				}
+			});
+		}
+
+		function toggleAdvancedOptions() {
+			document.getElementById("advancedOptions").checked ? showDiv("aodiv") : hideDiv("aodiv");
+		}
+
+		function onLoad() {
+			// hide everything
+			hideDiv("loginDiv");
+			hideDiv("fido2Div");
+			hideDiv("errorDiv");
+
+			// figure out if we are logged in and render
+			$.ajax({
+				type: "GET",
+				url: baseURL + '/me',
+			}).done((data, textStatus, jqXHR) => {
+				var rspStatus = jqXHR.status;
+				if (rspStatus == 200) {
+					userData = data;
+					if (userData.authenticated) {
+						populateFido2Div();
+						showDiv("fido2Div");
+					} else {
+						showDiv("loginDiv");
+					}
+				} else {
+					showError("Unexpected HTTP response code: " + rspStatus);
+				}
+			});
+		}
+
+		function refreshRegistrations() {
+			// similar to onLoad, but only updates the fido2Div contents unless error
+			$.ajax({
+				type: "GET",
+				url: baseURL + '/me',
+			}).done((data, textStatus, jqXHR) => {
+				var rspStatus = jqXHR.status;
+				if (rspStatus == 200) {
+					userData = data;
+					if (userData.authenticated) {
+						populateFido2Div();
+					} else {
+						// probably session timeout, just start again...
+						onLoad();
+					}
+				} else {
+					showError("Unexpected HTTP response code: " + rspStatus);
+				}
+			});
+		}
+
+		function register() {
+			clearError();
+			
+			// prepare an options call based on the selected registration criteria
+			var options = {};
+			if (userData.authenticated) {
+				options["username"] = userData.username;
+				options["displayName"] = userData.username;
+			}
+			
+			options["authenticatorSelection"] = {
+					"requireResidentKey": ($('#requireResidentKey:checkbox:checked').length > 0),
+					"userVerification": $('#userVerification').val()
+			};
+
+			// optional
+			var authenticatorAttachment = $('#authenticatorAttachment').val()
+			if (authenticatorAttachment == 'platform' || authenticatorAttachment == 'cross-platform') {
+				options["authenticatorSelection"]["authenticatorAttachment"] = authenticatorAttachment;
+			}
+			
+			options["attestation"] = $('#attestationConveyancePreference').val();
+					
+			sendAttestationOptionsRequest(options);	
+		}
+
+		function sendAttestationOptionsRequest(options) {
+			$.ajax({ 
+				type:"POST",
+				url: baseURL + '/attestation/options',
+				data: JSON.stringify(options),
+				beforeSend: function(request) {
+					request.setRequestHeader("Content-Type", "application/json");
+					request.setRequestHeader("Accept", "application/json");
+						}
+				}).done(function(data, textStatus, jqXHR) {
+					processAttestationOptionsResponse(data, textStatus, jqXHR);
+				}).fail(function(jqXHR, textStatus, errorThrown) {
+					processAttestationOptionsResponse(jqXHR["responseJSON"], textStatus, jqXHR);
+				});
+		}
+
+		function processAttestationOptionsResponse(serverOptions, textStatus, jqXHR) {
+			var rspStatus = jqXHR.status;
+			//console.log("rspStatus: " + rspStatus);
+			if (rspStatus == 200) {
+				// all ok - let's invoke the WebAuthn API to register
+				
+				// remove the status and errorMessage keys
+				delete serverOptions["status"];
+				delete serverOptions["errorMessage"];
+
+				// potential modifications to the serverOptions based on advanced browser-provided options
+				var useExcludeCredentials = ($('#excludeCredentials:checkbox:checked').length > 0);
+				if (!useExcludeCredentials) {
+					serverOptions["excludeCredentials"] = [];
+				}
+				
+				// massage some of the b64u fields into the required ArrayBuffer types
+				var b64uUID = serverOptions.user.id;
+				serverOptions.user.id = new Uint8Array(b64toBA(b64utob64(b64uUID)));
+
+				var b64uChallenge = serverOptions.challenge;
+				serverOptions.challenge = new Uint8Array(b64toBA(b64utob64(b64uChallenge)));
+
+				if (serverOptions["excludeCredentials"] != null && serverOptions["excludeCredentials"].length > 0) {
+					for (var i = 0; i < serverOptions["excludeCredentials"].length; i++) {
+						var b64uCID = serverOptions.excludeCredentials[i].id;
+						serverOptions.excludeCredentials[i].id= new Uint8Array(b64toBA(b64utob64(b64uCID)));
+					}
+				}
+
+				var credCreateOptions = { "publicKey": serverOptions };
+				
+				// call the webauthn API
+				navigator.credentials.create(credCreateOptions).then(
+					function(result) {
+						// success
+						createResponse = result;
+							console.log("Received from authenticator: " + result);
+												
+							// marshall the important parts of the response into an object which we'll later send to the server for validation
+							var clientDataJSONB64u = hextob64u(BAtohex(new Uint8Array(createResponse.response.clientDataJSON)));
+							var attestationObjectCBORB64u = hextob64u(BAtohex(new Uint8Array(createResponse.response.attestationObject)));
+							var clientExtensionResults = createResponse.getClientExtensionResults();
+							
+							attestationResponseObject = {};
+							attestationResponseObject["id"] = createResponse.id;
+							attestationResponseObject["rawId"] = createResponse.id;
+							attestationResponseObject["type"] = "public-key";
+							attestationResponseObject["response"] = {
+									"clientDataJSON": clientDataJSONB64u,
+									"attestationObject": attestationObjectCBORB64u
+							};
+							
+							// if there are extensions results, include those
+							if (clientExtensionResults != null) {
+								attestationResponseObject["getClientExtensionResults"] = clientExtensionResults;
+							}
+							
+							// prompt for the nickname
+							promptForNickname();
+
+					}, function(err) {
+						// error
+							console.log(err);
+							showError("FIDO2 registration failed: " + err);
+					});
+			} else {
+				console.log("Unexpected HTTP response code: " + rspStatus);
+				showError("Unexpected HTTP response code: " + rspStatus);
+			}
+		}
+
+		function promptForNickname() {
+			$('#nickname').val('');
+			showDiv("nicknamediv");
+			$('#nickname').keypress(function(event) {
+				var keycode = (event.keyCode ? event.keyCode : event.which);
+				if(keycode == '13') {
+					processNickname();	
+				}
+			});
+			$('#nickname').focus();
+		}
+
+		function processNickname() {
+			hideDiv("nicknamediv");
+			
+			if (attestationResponseObject != null) {
+			 	attestationResponseObject["nickname"] = $('#nickname').val();
+			
+				// send attestation response object to server
+				console.log("Sending to server: " + JSON.stringify(attestationResponseObject));
+				sendAttestationResult(attestationResponseObject);
+			}
+			
+			// clear it
+			attestationResponseObject = null;
+		}
+
+		function sendAttestationResult(response) {
+			$.ajax({ 
+				type:"POST",
+				url: baseURL + '/attestation/result',
+				data: JSON.stringify(response),
+				beforeSend: function(request) {
+					request.setRequestHeader("Content-Type", "application/json");
+					request.setRequestHeader("Accept", "application/json");
+						}
+				}).done(function(data, textStatus, jqXHR) {
+					processAttestationResultResponse(data, textStatus, jqXHR);
+				}).fail(function(jqXHR, textStatus, errorThrown) {
+					processAttestationResultResponse(
+							(jqXHR["responseJSON"] != null ? jqXHR["responseJSON"] : 
+								(jqXHR["responseText"] != null ? JSON.parse(jqXHR.responseText) : null)) , textStatus, jqXHR);
+				});
+		}
+
+		function processAttestationResultResponse(data, textStatus, jqXHR) {
+			var rspStatus = jqXHR.status;
+			//console.log("rspStatus: " + rspStatus);
+			if (rspStatus == 200) {
+				console.log("processAttestationResultResponse received: " + JSON.stringify(data));
+				// refresh registration table
+				refreshRegistrations();
+			} else {
+				console.log("Unexpected HTTP response code: " + rspStatus);
+				var detailsMsg = null;
+				if (data != null && data["status"] != null && data["errorMessage"] != null) {
+					detailsMsg = " ErrorStatus: " + data.status + " ErrorMsg: " + data.errorMessage;
+				}
+				showError("Unexpected HTTP response code: " + rspStatus + (detailsMsg == null ? "" : detailsMsg));
+			}
+		}
+
+		function testAuthentication(i) {			
+			//alert('Testing login with reg: ' + userData.credentials[i].nickname);
+			clearError();
+
+			// prepare an options call based on the selected registration
+			var options = {};
+			if (userData.authenticated) {
+				options["username"] = userData.username;
+			}
+			
+			sendAssertionOptionsRequest(options, i, false);	
+		}
+
+		function sendAssertionOptionsRequest(options, i, performLogin) {
+			$.ajax({ 
+				type:"POST",
+				url: baseURL + '/assertion/options',
+				data: JSON.stringify(options),
+				beforeSend: function(request) {
+					request.setRequestHeader("Content-Type", "application/json");
+					request.setRequestHeader("Accept", "application/json");
+						}
+				}).done(function(data, textStatus, jqXHR) {
+					processAssertionOptionsResponse(data, textStatus, jqXHR, i, performLogin);
+				}).fail(function(jqXHR, textStatus, errorThrown) {
+					processAssertionOptionsResponse(jqXHR["responseJSON"], textStatus, jqXHR, i, performLogin);
+				});
+		}
+
+		function processAssertionOptionsResponse(serverOptions, textStatus, jqXHR, i, performLogin) {
+			var rspStatus = jqXHR.status;
+			//console.log("rspStatus: " + rspStatus);
+			if (rspStatus == 200) {
+				// all ok - let's invoke the WebAuthn API to authenticate
+				console.log("Received assertion options: " + JSON.stringify(serverOptions));
+				
+				// remove the status and errorMessage keys
+				delete serverOptions["status"];
+				delete serverOptions["errorMessage"];
+				
+				// potential modifications to the serverOptions based on the selected registration
+				
+				// we filter the allowCredentials list to include only the authenticator being tested. 
+				// If i < 0, then we use whatever the server sent
+				if (i >= 0 && serverOptions["allowCredentials"] != null) {
+					var newAllowCredentials = [];
+					for (var j = 0; j < serverOptions.allowCredentials.length && newAllowCredentials.length == 0; j++) {
+						if (serverOptions.allowCredentials[j].id == userData.credentials[i]["credentialId"]) {
+							newAllowCredentials.push(serverOptions.allowCredentials[i]);
+						}
+					}
+					serverOptions.allowCredentials = newAllowCredentials;
+				}
+				
+				// massage some of the b64u fields into the required ArrayBuffer types
+				var b64uChallenge = serverOptions.challenge;
+				serverOptions.challenge = new Uint8Array(b64toBA(b64utob64(b64uChallenge)));
+
+				if (serverOptions["allowCredentials"] != null && serverOptions["allowCredentials"].length > 0) {
+					for (var i = 0; i < serverOptions["allowCredentials"].length; i++) {
+						var b64uCID = serverOptions.allowCredentials[i].id;
+						serverOptions.allowCredentials[i].id= new Uint8Array(b64toBA(b64utob64(b64uCID)));
+					}
+				}
+
+				var credRequestOptions = { "publicKey": serverOptions };
+				console.log("calling navigator.credentials.get with: " + JSON.stringify(credRequestOptions));
+				
+				// call the webauthn API
+				navigator.credentials.get(credRequestOptions).then(
+					function(authenticateResponse) {
+						// success
+						console.log("Received from authenticator: " + JSON.stringify(authenticateResponse));
+						
+						// marshall the important parts of the response into an object which we send to the server for validation
+						var clientDataJSONB64u = hextob64u(BAtohex(new Uint8Array(authenticateResponse.response.clientDataJSON)));
+						var authenticatorDataCBORB64u = hextob64u(BAtohex(new Uint8Array(authenticateResponse.response.authenticatorData)));
+						var signatureB64u = hextob64u(BAtohex(new Uint8Array(authenticateResponse.response.signature)));
+						var userHandleB64U = hextob64u(BAtohex(new Uint8Array(authenticateResponse.response.userHandle)));
+						var clientExtensionResults = authenticateResponse.getClientExtensionResults();
+						
+						assertionResponseObject = {};
+						assertionResponseObject["id"] = authenticateResponse.id;
+						assertionResponseObject["rawId"] = authenticateResponse.id;
+						assertionResponseObject["type"] = "public-key";
+						assertionResponseObject["response"] = {
+								"clientDataJSON": clientDataJSONB64u,
+								"authenticatorData": authenticatorDataCBORB64u,
+								"signature": signatureB64u,
+								"userHandle": userHandleB64U,
+						};
+						
+						// if there are extensions results, include those
+						if (clientExtensionResults != null) {
+							assertionResponseObject["getClientExtensionResults"] = clientExtensionResults;
+						}
+						
+						// send to server for result processing
+						console.log("Sending to server: " + JSON.stringify(assertionResponseObject));
+						sendAssertionResult(assertionResponseObject, performLogin);
+					}, function(err) {
+						// error
+							console.log(err);
+							showError("FIDO2 authentication failed: " + err);
+					});
+			} else {
+				console.log("Unexpected HTTP response code: " + rspStatus);
+				showError("Unexpected HTTP response code: " + rspStatus);
+			}
+		}
+
+		function sendAssertionResult(response, performLogin) {
+			$.ajax({ 
+				type:"POST",
+				url: baseURL + (performLogin ? '/assertion/login' : '/assertion/result'),
+				data: JSON.stringify(response),
+				beforeSend: function(request) {
+					request.setRequestHeader("Content-Type", "application/json");
+					request.setRequestHeader("Accept", "application/json");
+						}
+				}).done(function(data, textStatus, jqXHR) {
+					processAssertionResultResponse(data, textStatus, jqXHR, performLogin);
+				}).fail(function(jqXHR, textStatus, errorThrown) {
+					processAssertionResultResponse(jqXHR["responseJSON"], textStatus, jqXHR, performLogin);
+				});
+		}
+
+		function processAssertionResultResponse(data, textStatus, jqXHR, performLogin) {
+			var rspStatus = jqXHR.status;
+			if (rspStatus == 200) {
+				console.log("processAssertionResultResponse received: " + JSON.stringify(data));
+				if (performLogin) {
+					// we should have received user information in response
+					userData = data;
+					if (userData.authenticated) {
+						hideDiv("loginDiv");
+						populateFido2Div();
+						showDiv("fido2Div");
+					} else {
+						showError(data.errorMessage ? data.errorMessage : "Unable to login");
+					}
+				} else {
+					// this was just a test authentication
+					if (data.status == "ok") {						
+						alert("Authentication successful");
+					} else {
+						alert("Authentication failed: " + data.errorMessage);
+					}
+				}
+			} else {
+				console.log("Unexpected HTTP response code: " + rspStatus);
+				showError("Unexpected HTTP response code: " + rspStatus);
+			}
+		}
+
+		function doUsernamelessLogin() {
+			// get assertion options with empty username, and indicate this is a login operation
+			sendAssertionOptionsRequest({"username":""}, -1, true);	
+		}
+
+
+	</script>
+</head>
+<body onload="onLoad()">
+	<h2>FIDO2 Demo Relying Party</h2>
+	<div id="loginDiv" style="display:none">
+		<table border="0">
+			<tr><td>Username:</td><td><input id="username" type="text" size="20" value="emily" /></td></tr>
+			<tr><td>Password:</td><td><input id="password" type="password" size="20" /></td></tr>
+			<tr><td colspan="2"><input type="button" value="Username/Password Login" onclick="doLogin()" /></td></tr>
+			</tr>
+		</table>
+		<br />
+		<input type="button" value="FIDO2 Usernameless Login" onclick="doUsernamelessLogin()" />
+	</div>
+	<div id="fido2Div" style="display:none">
+		<div id="usernameDiv"></div>
+		<br>
+		<table id="fido2registrationsTable" border="1">
+			<tr><th>Friendly Name</th><th>Brand</th><th>RP ID</th><th>Operations</th></tr>
+		</table>
+		<br>
+
+		<h2 class="sectionTitle">New Registration</h2>
+		<input type="checkbox" id="advancedOptions" onclick="toggleAdvancedOptions() "/>&nbsp;Show Advanced Registration Options (e.g. to select resident key)
+		<div id="aodiv" style="display:none">
+		    <table border="0">
+		    	<tr><td><b>Exclude Credentials</b></td></tr>
+		    	<tr><td><input type="checkbox" id="excludeCredentials" checked />&nbsp;Use existing registrations for excludeCredentials</td></tr>
+		    	<tr><td><b>Authenticator Selection Criteria</b></td></tr>
+		    	<tr><td><input type="checkbox" id="requireResidentKey" />&nbsp;Require Resident Key (you need this for the Usernameless login scenario)</td></tr>
+		    	<tr>
+		    	  <td>User Verification:&nbsp;
+		    	    <select id="userVerification">
+		    	      <option value="required">required</option>
+		    	      <option value="preferred" selected>preferred</option>
+		    	      <option value="discouraged">discouraged</option>
+		    	    </select>
+		    	  </td>
+		    	</tr>
+		    	<tr>
+		    	  <td>Authenticator Attachment:&nbsp;
+		    	    <select id="authenticatorAttachment">
+		    	      <option value="none" selected>unspecified</option>
+		    	      <option value="platform">platform</option>
+		    	      <option value="cross-platform">cross-platform</option>
+		    	    </select>
+		    	  </td>
+		    	</tr>
+		    	<tr><td><b>Attestation Conveyance Preference</b></td></tr>
+		    	<tr>
+		    	  <td>Preference:&nbsp;
+		    	    <select id="attestationConveyancePreference">
+		    	      <option value="none">none</option>
+		    	      <option value="indirect">indirect</option>
+		    	      <option value="direct" selected>direct</option>
+		    	    </select>
+		    	  </td>
+		    	</tr>
+		    </table>
+		</div>
+	    <br /><input type="button" value="Register Authenticator" onClick="register()" />
+	    <br />      		
+		<div id="nicknamediv" style="display:none">
+		<br />
+		Registration nickname:&nbsp;&nbsp;<input type="text" id="nickname" size="20" />
+		&nbsp;&nbsp;<input type="button" onClick="processNickname()" value="Save Registration" />
+		</div>
+		<br />
+	</div>
+	<div id="errorDiv" style="display:none">
+	</div>
+</body>
+</html>
