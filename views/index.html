@@ -47,7 +47,7 @@
 					type: "POST",
 					url: baseURL + '/login',
 					data: JSON.stringify({"username": username, "password": password}),
-					beforeSend: function(request) {
+					beforeSend: (request) => {
     					request.setRequestHeader("Content-type", "application/json");
     					request.setRequestHeader("Accept", "application/json");
   					}
@@ -76,7 +76,7 @@
 			$.ajax({
 				type: "GET",
 				url: baseURL + '/logout',
-				beforeSend: function(request) {
+				beforeSend: (request) => {
 					request.setRequestHeader("Accept", "application/json");
 					}
 			}).done((data, textStatus, jqXHR) => {
@@ -135,7 +135,7 @@
 				type: "POST",
 				url: baseURL + '/deleteRegistration',
 				data: JSON.stringify({"credentialId": userData.credentials[i].credentialId}),
-				beforeSend: function(request) {
+				beforeSend: (request) => {
 					request.setRequestHeader("Content-type", "application/json");
 					request.setRequestHeader("Accept", "application/json");
 					}
@@ -232,13 +232,13 @@
 				type:"POST",
 				url: baseURL + '/attestation/options',
 				data: JSON.stringify(options),
-				beforeSend: function(request) {
+				beforeSend: (request) => {
 					request.setRequestHeader("Content-Type", "application/json");
 					request.setRequestHeader("Accept", "application/json");
 						}
-				}).done(function(data, textStatus, jqXHR) {
+				}).done((data, textStatus, jqXHR) => {
 					processAttestationOptionsResponse(data, textStatus, jqXHR);
-				}).fail(function(jqXHR, textStatus, errorThrown) {
+				}).fail((jqXHR, textStatus, errorThrown) => {
 					processAttestationOptionsResponse(jqXHR["responseJSON"], textStatus, jqXHR);
 				});
 		}
@@ -277,7 +277,7 @@
 				
 				// call the webauthn API
 				navigator.credentials.create(credCreateOptions).then(
-					function(result) {
+					(result) => {
 						// success
 						createResponse = result;
 							console.log("Received from authenticator: " + result);
@@ -304,7 +304,7 @@
 							// prompt for the nickname
 							promptForNickname();
 
-					}, function(err) {
+					}, (err) => {
 						// error
 							console.log(err);
 							showError("FIDO2 registration failed: " + err);
@@ -318,7 +318,7 @@
 		function promptForNickname() {
 			$('#nickname').val('');
 			showDiv("nicknamediv");
-			$('#nickname').keypress(function(event) {
+			$('#nickname').keypress((event) => {
 				var keycode = (event.keyCode ? event.keyCode : event.which);
 				if(keycode == '13') {
 					processNickname();	
@@ -347,13 +347,13 @@
 				type:"POST",
 				url: baseURL + '/attestation/result',
 				data: JSON.stringify(response),
-				beforeSend: function(request) {
+				beforeSend: (request) => {
 					request.setRequestHeader("Content-Type", "application/json");
 					request.setRequestHeader("Accept", "application/json");
 						}
-				}).done(function(data, textStatus, jqXHR) {
+				}).done((data, textStatus, jqXHR) => {
 					processAttestationResultResponse(data, textStatus, jqXHR);
-				}).fail(function(jqXHR, textStatus, errorThrown) {
+				}).fail((jqXHR, textStatus, errorThrown) => {
 					processAttestationResultResponse(
 							(jqXHR["responseJSON"] != null ? jqXHR["responseJSON"] : 
 								(jqXHR["responseText"] != null ? JSON.parse(jqXHR.responseText) : null)) , textStatus, jqXHR);
@@ -395,13 +395,13 @@
 				type:"POST",
 				url: baseURL + '/assertion/options',
 				data: JSON.stringify(options),
-				beforeSend: function(request) {
+				beforeSend: (request) => {
 					request.setRequestHeader("Content-Type", "application/json");
 					request.setRequestHeader("Accept", "application/json");
 						}
-				}).done(function(data, textStatus, jqXHR) {
+				}).done((data, textStatus, jqXHR) => {
 					processAssertionOptionsResponse(data, textStatus, jqXHR, i, performLogin);
-				}).fail(function(jqXHR, textStatus, errorThrown) {
+				}).fail((jqXHR, textStatus, errorThrown) => {
 					processAssertionOptionsResponse(jqXHR["responseJSON"], textStatus, jqXHR, i, performLogin);
 				});
 		}
@@ -447,7 +447,7 @@
 				
 				// call the webauthn API
 				navigator.credentials.get(credRequestOptions).then(
-					function(authenticateResponse) {
+					(authenticateResponse) => {
 						// success
 						console.log("Received from authenticator: " + JSON.stringify(authenticateResponse));
 						
@@ -477,7 +477,7 @@
 						// send to server for result processing
 						console.log("Sending to server: " + JSON.stringify(assertionResponseObject));
 						sendAssertionResult(assertionResponseObject, performLogin);
-					}, function(err) {
+					}, (err) => {
 						// error
 							console.log(err);
 							showError("FIDO2 authentication failed: " + err);
@@ -493,13 +493,13 @@
 				type:"POST",
 				url: baseURL + (performLogin ? '/assertion/login' : '/assertion/result'),
 				data: JSON.stringify(response),
-				beforeSend: function(request) {
+				beforeSend: (request) => {
 					request.setRequestHeader("Content-Type", "application/json");
 					request.setRequestHeader("Accept", "application/json");
 						}
-				}).done(function(data, textStatus, jqXHR) {
+				}).done((data, textStatus, jqXHR) => {
 					processAssertionResultResponse(data, textStatus, jqXHR, performLogin);
-				}).fail(function(jqXHR, textStatus, errorThrown) {
+				}).fail((jqXHR, textStatus, errorThrown) => {
 					processAssertionResultResponse(jqXHR["responseJSON"], textStatus, jqXHR, performLogin);
 				});
 		}
