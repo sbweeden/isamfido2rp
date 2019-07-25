@@ -1,16 +1,9 @@
 //
 // fido2services - performs user and FIDO2 operations against ISAM
 //
-const request = require('request');
+const requestp = require('request-promise-native');
 const tm = require('./oauthtokenmanager.js');
-
-/**
-* Simply wrapper for an error message
-*/
-function fido2Error(msg) {
-	this.status = "failed";
-   	this.errorMessage = msg;
-}
+const fido2error = require('./fido2error.js');
 
 /**
 * Ensure the request contains a "username" attribute, and make sure it's either the
@@ -20,17 +13,37 @@ function validateSelf(fidoRequest, username, allowEmptyUsername) {
 
 	if (username != null) {
 		if (!((fidoRequest.username == username) || (allowEmptyUsername && fidoRequest.username == ""))) {
-			throw new fido2Error("Invalid username in request");
+			throw new fido2error.fido2Error("Invalid username in request");
 		}
 	} else {
 		// no currently authenticated user
 		// only permitted if fidoRequest.username is the empty string and allowEmptyUsername
 		if (!(fidoRequest.username == "" && allowEmptyUsername)) {
-			throw new fido2Error("Not authenticated");
+			throw new fido2error.fido2Error("Not authenticated");
 		}
 	}
 
 	return fidoRequest;
+}
+
+function handleErrorResponse(methodName, rsp, e, genericError) {
+	// log what we can about this error case
+	console.log("isamservices." + methodName + " e: " + 
+		e + " stringify(e): " + (e != null ? JSON.stringify(e): "null"));
+
+	// if e is already a fido2Error, return it, otherwise return a generic error message
+	rsp.json((e != null && e.status == "failed") ? 
+		e : new fido2error.fido2Error(genericError));
+}
+
+function rethrowRequestError(methodName, e, genericError) {
+	console.log("rethrowing isamservices." + methodName + " e: " + 
+		e + " stringify(e): " + (e != null ? JSON.stringify(e): "null"));
+	var errMsg = genericError;
+	if (e != null && e.error != null && e.error.errorMessage != null) {
+		errMsg = e.error.errorMessage;
+	}
+	throw new fido2error.fido2Error(errMsg);
 }
 
 /**
@@ -40,7 +53,7 @@ function validateUsernamePassword(req ,rsp) {
 	var username = req.body.username;
 	var password = req.body.password;
 	if (username != null && password != null) {
-		var options = {
+		requestp({
 			url: process.env.ISAM_APIAUTHSVC_ENDPOINT,
 			method: "POST",
 			headers: {
@@ -53,22 +66,26 @@ function validateUsernamePassword(req ,rsp) {
 				"operation": "verify",
 				"username": username,
 				"password": password
-			}
-		};
-		request(options, (err, rsp2, body) => {
-			if (err == null && rsp2 != null && rsp2.statusCode == 204) {
-				// login worked - send back user response
+			},
+			resolveWithFullResponse: true
+		}).then((authResponse) => {
+			if (authResponse != null && authResponse.statusCode == 204) {
+				// pwd check worked - finish login and return registrations
 				req.session.username = username;
-				sendUserResponse(req, rsp);
-			} else if (err == null && rsp2 != null && rsp2.statusCode == 200 && body.message != null) {
-				rsp.json(new fido2Error(body.message));
+				return getUserResponse(req);
 			} else {
-				console.log("err: " + err);
-				rsp.json(new fido2Error("Error communicating with ISAM AAC server"));
+				// throw an error. If we have an apiauthsvc response with an error message, use it, otherwise send a generic error message
+				throw new fido2error.fido2Error(
+						(authResponse != null && authResponse.body != null && authResponse.body.message != null) ? 
+							authResponse.body.message : "Invalid credentials");
 			}
+		}).then((userResponse) => {
+			rsp.json(userResponse);
+		}).catch((e) => {
+			handleErrorResponse("validateUsernamePassword", rsp, e, "Unable to validate username and password - see server log for details");
 		});
 	} else {
-		rsp.json(new fido2Error("Invalid username and password"));
+		rsp.json(new fido2error.fido2Error("Invalid username and password"));
 	}
 }
 
@@ -84,29 +101,26 @@ function validateUsernamePassword(req ,rsp) {
 * who is currently logged in.
 */
 function proxyFIDO2ServerRequest(req, rsp, validateUsername, allowEmptyUsername) {
-	try {
-		var bodyToSend = validateUsername ? validateSelf(req.body, req.session.username, allowEmptyUsername) : req.body;
-		tm.executeWithAccessToken((access_token) => {
-			if (access_token != null) {
-				var options = {
-					url: process.env.ISAM_FIDO2_ENDPOINT_PREFIX + req.url,
-					method: "POST",
-					headers: {
-						"Content-type": "application/json",
-						"Accept": "application/json",
-						"Authorization": "Bearer " + access_token
-					},
-					json: true,
-					body: bodyToSend
-				};
-				request(options).pipe(rsp);
-			} else {
-				rsp.json(new fido2Error("Unable to get communicate with FIDO2 server"));
-			}
+
+	var bodyToSend = validateUsername ? validateSelf(req.body, req.session.username, allowEmptyUsername) : req.body;
+	return tm.getAccessToken()
+	.then((access_token) => {
+		return requestp({
+			url: process.env.ISAM_FIDO2_ENDPOINT_PREFIX + req.url,
+			method: "POST",
+			headers: {
+				"Content-type": "application/json",
+				"Accept": "application/json",
+				"Authorization": "Bearer " + access_token
+			},
+			json: true,
+			body: bodyToSend
 		});
-	} catch (errObj) {
-		rsp.json(errObj);
-	}
+	}).then((fido2Response) => {
+		rsp.json(fido2Response);
+	}).catch((e) => {
+		handleErrorResponse("proxyFIDO2ServerRequest", rsp, e, "Unable to proxyFIDO2ServerRequest - see server log for details");
+	});
 }
 
 /**
@@ -114,35 +128,79 @@ function proxyFIDO2ServerRequest(req, rsp, validateUsername, allowEmptyUsername)
 * the login process.
 */
 function validateFIDO2Login(req, rsp) {
-	tm.executeWithAccessToken((access_token) => {
-		if (access_token != null) {
-			var options = {
-				url: process.env.ISAM_FIDO2_ENDPOINT_PREFIX + "/assertion/result",
-				method: "POST",
-				headers: {
-					"Content-type": "application/json",
-					"Accept": "application/json",
-					"Authorization": "Bearer " + access_token
-				},
-				json: true,
-				body: req.body
-			};
-			request(options, (err, rsp2, body) => {
-				if (err == null && rsp2 != null && rsp2.statusCode == 200) {
-					if (body.status == "ok") {
-						// login worked - send back user response
-						req.session.username = body.user.name;
-						sendUserResponse(req, rsp);
-					} else {
-						rsp.json(new fido2Error(body.errorMessage ? body.errorMessage : "Error communicating with FIDO2 server"));
-					}
-				} else {
-					rsp.json(new fido2Error("Error communicating with FIDO2 server"));
-				}
-			});
+	var access_token = null;
+	return tm.getAccessToken()
+	.then((at) => {
+		access_token = at;
+		return requestp({
+			url: process.env.ISAM_FIDO2_ENDPOINT_PREFIX + "/assertion/result",
+			method: "POST",
+			headers: {
+				"Content-type": "application/json",
+				"Accept": "application/json",
+				"Authorization": "Bearer " + access_token
+			},
+			json: true,
+			body: req.body
+		}).catch((e) => {
+			rethrowRequestError(validateFIDO2Login, e, "Unable to validate fido2 login - see server log for details");
+		});
+	}).then((assertionResult) => {
+		if (assertionResult.status == "ok") {
+			req.session.username = assertionResult.user.name;
+			return getUserResponse(req);
 		} else {
-			rsp.json(new fido2Error("Unable to get communicate with FIDO2 server"));
+			throw fido2Error(assertionResult.errorMessage ? assertionResult.errorMessage : "Error communicating with FIDO2 server");
 		}
+	}).then((userResponse) => {
+		rsp.json(userResponse);
+	}).catch((e) => {
+		handleErrorResponse("validateFIDO2Login", rsp, e, "Unable to validate fido2 login - see server log for details");
+	});
+}
+
+function coerceSCIMResultToUserResponse(req, scimResult) {
+	if (scimResult.totalResults == 1) {
+		// use this opportunity to store the SCIM id in session as well
+		req.session.userSCIMId = scimResult.Resources[0].id;
+
+		var result = {
+			"authenticated": true,
+			"username": req.session.username,
+			"credentials": []
+		};
+
+		var fido2RegistrationsSchema = scimResult.Resources[0]["urn:ietf:params:scim:schemas:extension:isam:1.0:FIDO2Registrations"];
+		if (fido2RegistrationsSchema != null) {
+			var fido2Registrations = fido2RegistrationsSchema["fido2registrations"];
+			if (fido2Registrations != null) {
+				result.credentials = fido2Registrations;
+			}
+		}
+
+		return result;
+	} else {
+		throw new fido2error.fido2Error("Unable to get SCIM data for user: " + username);
+	}
+}
+
+function getUserResponse(req) {
+	var access_token = null;
+	return tm.getAccessToken()
+	.then((at) => {
+		access_token = at;
+		return requestp({
+			url: process.env.ISAM_SCIM_ENDPOINT_PREFIX + "/Users",
+			method: "GET",
+			qs: { "filter" : "username eq " + req.session.username },
+			headers: {
+				"Accept": "application/json",
+				"Authorization": "Bearer " + access_token
+			},
+			json: true
+		});
+	}).then((scimResult) => {
+		return coerceSCIMResultToUserResponse(req, scimResult);
 	});
 }
 
@@ -154,51 +212,12 @@ function validateFIDO2Login(req, rsp) {
 */
 function sendUserResponse(req, rsp) {
 	if (req.session.username) {
-		var result = {};
-		result.authenticated = true;
-		result.username = req.session.username;
-
-		// call SCIM to get and parse credentials
-		tm.executeWithAccessToken((access_token) => {
-			if (access_token != null) {
-				var options = {
-					url: process.env.ISAM_SCIM_ENDPOINT_PREFIX + "/Users",
-					method: "GET",
-					qs: { "filter" : "username eq " + req.session.username },
-					headers: {
-						"Accept": "application/json",
-						"Authorization": "Bearer " + access_token
-					},
-					json: true
-				};
-				request(options, (err, rsp2, body) => {
-					var credentials = [];
-					if (err == null && rsp2 != null && rsp2.statusCode == 200) {
-						if (body.totalResults == 1) {
-							// use this opportunity to store the SCIM id in session as well
-							req.session.userSCIMId = body.Resources[0].id;
-
-							// get and return all the FIDO2 registrations
-							var fido2RegistrationsSchema = body.Resources[0]["urn:ietf:params:scim:schemas:extension:isam:1.0:FIDO2Registrations"];
-							if (fido2RegistrationsSchema != null) {
-								var fido2Registrations = fido2RegistrationsSchema["fido2registrations"];
-								if (fido2Registrations != null) {
-									credentials = fido2Registrations;
-								}
-							}
-						}
-						// marshall the credentials and send result
-						result.credentials = credentials;
-						rsp.json(result);
-					} else {
-						console.log("unable to get SCIM data for user: " + req.session.username);
-						rsp.json(new fido2Error("Error communicating with SCIM server"));
-					}
-
-				});
-			} else {
-				rsp.json(new fido2Error("Unable to communicate with SCIM server"));
-			}
+		tm.getAccessToken().then((at) => {
+			return getUserResponse(req);
+		}).then((userResponse) => {
+			rsp.json(userResponse);
+		}).catch((e) => {
+			handleErrorResponse("sendUserResponse", rsp, e, "Unable to get and send user response - see server log for details");
 		});
 	} else {
 		rsp.json({"authenticated": false});
@@ -211,62 +230,41 @@ function sendUserResponse(req, rsp) {
 */
 function deleteRegistration(req, rsp) {
 	if (req.session.username) {
-		var result = {};
-		result.authenticated = true;
-		result.username = req.session.username;
-
 		var credentialId = req.body.credentialId;
 		if (credentialId != null) {
-			// call SCIM to get and parse credentials
-			tm.executeWithAccessToken((access_token) => {
-				if (access_token != null) {
-					var options = {
-						url: process.env.ISAM_SCIM_ENDPOINT_PREFIX + "/Users/" + req.session.userSCIMId,
-						method: "PATCH",
-						headers: {
-							"Accept": "application/json",
-							"Authorization": "Bearer " + access_token
-						},
-						json: true,
-						body: {
-						    "schemas": [
-						        "urn:ietf:params:scim:api:messages:2.0:PatchOp"
-						    ],
-						    "Operations": [
-						        {
-						          "op": "remove",
-						          "path": "urn:ietf:params:scim:schemas:extension:isam:1.0:FIDO2Registrations:fido2registrations[credentialId eq " 
-						          	+ credentialId + "]",
-						        }
-						    ]
-						}
-
-					};
-					request(options, (err, rsp2, body) => {
-						var credentials = [];
-						if (err == null && rsp2 != null && rsp2.statusCode == 200) {
-							if (body.totalResults == 1) {
-								// get and return all the FIDO2 registrations
-								var fido2RegistrationsSchema = body.Resources[0]["urn:ietf:params:scim:schemas:extension:isam:1.0:FIDO2Registrations"];
-								if (fido2RegistrationsSchema != null) {
-									var fido2Registrations = fido2RegistrationsSchema["fido2registrations"];
-									if (fido2Registrations != null) {
-										credentials = fido2Registrations;
-									}
-								}
-							}
-							// marshall the credentials and send result
-							result.credentials = credentials;
-							rsp.json(result);
-						} else {
-							console.log("unable to update SCIM data for user: " + req.session.username);
-							rsp.json(new fido2Error("Error communicating with SCIM server"));
-						}
-					});
-				} else {
-					rsp.json(new fido2Error("Unable to communicate with SCIM server"));
-				}
+			var access_token = null;
+			tm.getAccessToken().then((at) => {
+				access_token = at;
+				return requestp({
+					url: process.env.ISAM_SCIM_ENDPOINT_PREFIX + "/Users/" + req.session.userSCIMId,
+					method: "PATCH",
+					headers: {
+						"Accept": "application/json",
+						"Authorization": "Bearer " + access_token
+					},
+					json: true,
+					body: {
+					    "schemas": [
+					        "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+					    ],
+					    "Operations": [
+					        {
+					          "op": "remove",
+					          "path": "urn:ietf:params:scim:schemas:extension:isam:1.0:FIDO2Registrations:fido2registrations[credentialId eq " 
+					          	+ credentialId + "]",
+					        }
+					    ]
+					}
+				});
+			}).then((scimResult) => {
+				return coerceSCIMResultToUserResponse(req, scimResult);
+			}).then((userResponse) => {
+				rsp.json(userResponse);
+			}).catch((e) => {
+				handleErrorResponse("deleteRegistration", rsp, e, "Unable to delete registration - see server log for details");
 			});
+
+
 		} else {
 			rsp.json(new fido2Error("Invalid credentialId"));	
 		}

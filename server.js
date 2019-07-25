@@ -4,7 +4,6 @@
 // init project
 const express = require('express');
 const session = require('express-session');
-const request = require('request');
 const https = require('https');
 const fs = require('fs');
 const identityServices = require('./isamservices.js')
