@@ -24,6 +24,7 @@ function getAccessToken() {
 		if (tokenResponse != null && tokenResponse.expires_at_ms > (now.getTime() + (2*60*1000))) {
 			resolve(tokenResponse.access_token);
 		} else {
+			var formData = null;
 			if (tokenResponse != null && tokenResponse.refresh_token != null) {
 				formData = {
 					"grant_type": "refresh_token",
