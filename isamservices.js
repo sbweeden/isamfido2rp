@@ -1,9 +1,41 @@
 //
 // fido2services - performs user and FIDO2 operations against ISAM
 //
-const requestp = require('request-promise-native');
 const tm = require('./oauthtokenmanager.js');
 const fido2error = require('./fido2error.js');
+
+// toggle this depending on the AAC advanced configuration parameter sps.authService.policyKickoffMethod
+var usingPathBasedPolicyKickoffMethod = false;
+
+/**
+ * Just calls fetch, but then does some standardized result/error handling for JSON-based API calls
+ */
+function myfetch(url, fetchOptions) {
+
+	let returnAsJSON = false;
+	if (fetchOptions["returnAsJSON"] != null) {
+		returnAsJSON = fetchOptions.returnAsJSON;
+		delete fetchOptions.returnAsJSON;
+	}
+
+	return fetch(
+		url,
+		fetchOptions
+	).then((result) => {
+		if (returnAsJSON) {
+			if (!result.ok) {
+				console.log("myfetch unexpected status: " + result.status + " for url: " + url);
+				return result.text().then((txt) => {
+					throw new fido2error.fido2Error("Unexpected HTTP response code: " + result.status + (txt != null ? (" body: " + txt) : ""));
+				});
+			} else {
+				return result.json();
+			}
+		} else {
+			return result;
+		}
+	});
+}
 
 /**
 * Ensure the request contains a "username" attribute, and make sure it's either the
@@ -53,31 +85,50 @@ function validateUsernamePassword(req ,rsp) {
 	var username = req.body.username;
 	var password = req.body.password;
 	if (username != null && password != null) {
-		requestp({
-			url: process.env.ISAM_APIAUTHSVC_ENDPOINT,
-			method: "POST",
-			headers: {
-				"Content-type": "application/json",
-				"Accept": "application/json"
-			},
-			json: true,
-			body: {
-				"PolicyId" : "urn:ibm:security:authentication:asf:password",
-				"operation": "verify",
-				"username": username,
-				"password": password
-			},
-			resolveWithFullResponse: true
-		}).then((authResponse) => {
-			if (authResponse != null && authResponse.statusCode == 204) {
+		console.log("validateUsernamePassword called for username: " + username);
+
+		let requestBody = {
+			"operation": "verify",
+			"username": username,
+			"password": password
+		}
+
+		let url = process.env.ISAM_APIAUTHSVC_ENDPOINT;
+		if (usingPathBasedPolicyKickoffMethod) {
+			url = url + "/policy/password";
+		} else {
+			requestBody["PolicyId"] = "urn:ibm:security:authentication:asf:password";
+		}
+
+		myfetch(
+			url,
+			// if using path-base
+			{
+				method: "POST",
+				headers: {
+					"Content-type": "application/json",
+					"Accept": "application/json"
+				},
+				body: JSON.stringify(requestBody),
+				returnAsJSON: false
+			}
+		).then((authResponse) => {
+			console.log("returned with authResponse status: " + authResponse.status);
+			if (authResponse != null && authResponse.status == 204) {
 				// pwd check worked - finish login and return registrations
 				req.session.username = username;
 				return getUserResponse(req);
 			} else {
-				// throw an error. If we have an apiauthsvc response with an error message, use it, otherwise send a generic error message
-				throw new fido2error.fido2Error(
-						(authResponse != null && authResponse.body != null && authResponse.body.message != null) ? 
-							authResponse.body.message : "Invalid credentials");
+				return authResponse.text().then((txt) => {
+					// throw an error. If we have an apiauthsvc response with an error message, use it, otherwise send a generic error message
+					console.log("authResponse.text(): " + txt);
+					let rspBody = null;
+					if (txt != null) {
+						rspBody = JSON.parse(txt);
+					}
+					throw new fido2error.fido2Error(
+						(rspBody != null && rspBody.message != null) ? rspBody.message : "Invalid credentials");
+				});
 			}
 		}).then((userResponse) => {
 			rsp.json(userResponse);
@@ -105,16 +156,17 @@ function proxyFIDO2ServerRequest(req, rsp, validateUsername, allowEmptyUsername)
 	var bodyToSend = validateUsername ? validateSelf(req.body, req.session.username, allowEmptyUsername) : req.body;
 	return tm.getAccessToken()
 	.then((access_token) => {
-		return requestp({
-			url: process.env.ISAM_FIDO2_ENDPOINT_PREFIX + req.url,
+		return myfetch(
+			process.env.ISAM_FIDO2_ENDPOINT_PREFIX + req.url,
+			{
 			method: "POST",
 			headers: {
 				"Content-type": "application/json",
 				"Accept": "application/json",
 				"Authorization": "Bearer " + access_token
 			},
-			json: true,
-			body: bodyToSend
+			body: JSON.stringify(bodyToSend),
+			returnAsJSON: true
 		});
 	}).then((fido2Response) => {
 		rsp.json(fido2Response);
@@ -132,17 +184,19 @@ function validateFIDO2Login(req, rsp) {
 	return tm.getAccessToken()
 	.then((at) => {
 		access_token = at;
-		return requestp({
-			url: process.env.ISAM_FIDO2_ENDPOINT_PREFIX + "/assertion/result",
+		return myfetch(
+			process.env.ISAM_FIDO2_ENDPOINT_PREFIX + "/assertion/result",
+			{
 			method: "POST",
 			headers: {
 				"Content-type": "application/json",
 				"Accept": "application/json",
 				"Authorization": "Bearer " + access_token
 			},
-			json: true,
-			body: req.body
-		}).catch((e) => {
+			body: JSON.stringify(req.body),
+			returnAsJSON: true
+			}
+		).catch((e) => {
 			rethrowRequestError(validateFIDO2Login, e, "Unable to validate fido2 login - see server log for details");
 		});
 	}).then((assertionResult) => {
@@ -189,16 +243,17 @@ function getUserResponse(req) {
 	return tm.getAccessToken()
 	.then((at) => {
 		access_token = at;
-		return requestp({
-			url: process.env.ISAM_SCIM_ENDPOINT_PREFIX + "/Users",
-			method: "GET",
-			qs: { "filter" : "username eq " + req.session.username },
-			headers: {
-				"Accept": "application/json",
-				"Authorization": "Bearer " + access_token
-			},
-			json: true
-		});
+		return myfetch(
+			process.env.ISAM_SCIM_ENDPOINT_PREFIX + "/Users?" + new URLSearchParams({ "filter" : "username eq " + req.session.username }),
+			{
+				method: "GET",
+				headers: {
+					"Accept": "application/json",
+					"Authorization": "Bearer " + access_token
+				},
+				returnAsJSON: true
+			}
+		);
 	}).then((scimResult) => {
 		return coerceSCIMResultToUserResponse(req, scimResult);
 	});
@@ -235,27 +290,29 @@ function deleteRegistration(req, rsp) {
 			var access_token = null;
 			tm.getAccessToken().then((at) => {
 				access_token = at;
-				return requestp({
-					url: process.env.ISAM_SCIM_ENDPOINT_PREFIX + "/Users/" + req.session.userSCIMId,
-					method: "PATCH",
-					headers: {
-						"Accept": "application/json",
-						"Authorization": "Bearer " + access_token
-					},
-					json: true,
-					body: {
-					    "schemas": [
-					        "urn:ietf:params:scim:api:messages:2.0:PatchOp"
-					    ],
-					    "Operations": [
-					        {
-					          "op": "remove",
-					          "path": "urn:ietf:params:scim:schemas:extension:isam:1.0:FIDO2Registrations:fido2registrations[credentialId eq " 
-					          	+ credentialId + "]",
-					        }
-					    ]
+				return myfetch(
+					process.env.ISAM_SCIM_ENDPOINT_PREFIX + "/Users/" + req.session.userSCIMId,
+					{
+						method: "PATCH",
+						headers: {
+							"Accept": "application/json",
+							"Authorization": "Bearer " + access_token
+						},
+						body: JSON.stringify({
+							"schemas": [
+								"urn:ietf:params:scim:api:messages:2.0:PatchOp"
+							],
+							"Operations": [
+								{
+								"op": "remove",
+								"path": "urn:ietf:params:scim:schemas:extension:isam:1.0:FIDO2Registrations:fido2registrations[credentialId eq " 
+									+ credentialId + "]",
+								}
+							]
+						}),
+						returnAsJSON: true
 					}
-				});
+				);
 			}).then((scimResult) => {
 				return coerceSCIMResultToUserResponse(req, scimResult);
 			}).then((userResponse) => {

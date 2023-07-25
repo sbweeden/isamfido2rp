@@ -425,7 +425,7 @@
 					var newAllowCredentials = [];
 					for (var j = 0; j < serverOptions.allowCredentials.length && newAllowCredentials.length == 0; j++) {
 						if (serverOptions.allowCredentials[j].id == userData.credentials[i]["credentialId"]) {
-							newAllowCredentials.push(serverOptions.allowCredentials[i]);
+							newAllowCredentials.push(serverOptions.allowCredentials[j]);
 						}
 					}
 					serverOptions.allowCredentials = newAllowCredentials;
@@ -436,9 +436,9 @@
 				serverOptions.challenge = new Uint8Array(b64toBA(b64utob64(b64uChallenge)));
 
 				if (serverOptions["allowCredentials"] != null && serverOptions["allowCredentials"].length > 0) {
-					for (var i = 0; i < serverOptions["allowCredentials"].length; i++) {
-						var b64uCID = serverOptions.allowCredentials[i].id;
-						serverOptions.allowCredentials[i].id= new Uint8Array(b64toBA(b64utob64(b64uCID)));
+					for (var k = 0; k < serverOptions["allowCredentials"].length; k++) {
+						var b64uCID = serverOptions.allowCredentials[k].id;
+						serverOptions.allowCredentials[k].id= new Uint8Array(b64toBA(b64utob64(b64uCID)));
 					}
 				}
 
