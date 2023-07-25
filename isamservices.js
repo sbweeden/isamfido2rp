@@ -113,7 +113,7 @@ function validateUsernamePassword(req ,rsp) {
 				returnAsJSON: false
 			}
 		).then((authResponse) => {
-			console.log("returned with authResponse status: " + authResponse.status);
+			//console.log("returned with authResponse status: " + authResponse.status);
 			if (authResponse != null && authResponse.status == 204) {
 				// pwd check worked - finish login and return registrations
 				req.session.username = username;
